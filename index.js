@@ -3,14 +3,16 @@ const express = require('express')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+require('dotenv').config()
 // const { get } = require('express/lib/response');
 const nodemailer = require('nodemailer');
 const mg = require('nodemailer-mailgun-transport');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 
 const app = express()
 
-require('dotenv').config()
+
 
 // middleware
 app.use(cors())
@@ -82,6 +84,48 @@ function sendAppointmentEmail(booking) {
   });
 }
 
+function sendPaymentConfirmationEmail(booking) {
+  const { patient, patientName, treatment, date, slot } = booking;
+
+  var email = {
+    from: "support@phero.com",
+    to: patient,
+    subject: `we have  received your payment for ${treatment} is on ${date} at ${slot} is Confirmed`,
+    text: `Your payment for for this Appointment ${treatment} is on ${date} at ${slot} is Confirmed`,
+    html: `
+      <div>
+        <p> Hello ${patientName}, </p>
+        <h3> Thank Your for your Appointment for ${treatment} is confirmed</h3>
+        <p>Looking forward to seeing you on ${date} at ${slot}.</p>
+        <h3>Our Address</h3>
+        <p>Andor Killa Bandorban</p>
+        <p>Bangladesh</p>
+        <a href="https://web.programming-hero.com/">unsubscribe</a>
+      </div>
+    `,
+  };
+
+  nodemailerMailgun.sendMail(email, (err, info) => {
+    if (err) {
+      console.log(err);
+    } else {
+      console.log(info);
+    }
+  });
+} 
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 async function run() {
@@ -92,6 +136,7 @@ async function run() {
     const bookingCollection = client.db('doctors_portal').collection('booking');
     const userCollection = client.db('doctors_portal').collection('user');
     const doctorCollection = client.db('doctors_portal').collection('doctors');
+    const paymentCollection = client.db('doctors_portal').collection('payments');
 
 
     /** 
@@ -119,7 +164,40 @@ async function run() {
 
     }
 
+    //api for payment 
 
+    app.post('/create-payment-intent',verifyJWT, async(req, res)=>{
+      const service = req.body;
+      const price = service.price;
+      const amount = price*100;
+
+     
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types:['card']
+      
+      });
+
+      res.send({clientSecret:paymentIntent})
+
+    });
+
+app.patch('/booking/:id', verifyJWT , async(req, res) =>{
+  const id = req.params.id;
+  const payment = req.body;
+  const filter = {_id: ObjectId(id)};
+  const updateDoc ={
+    $set:{
+      paid:true,
+      transactionId: payment.transactionId
+    }
+  }
+
+  const result = await paymentCollection.insertOne(payment);
+  const updateBooking = await bookingCollection.updateOne(filter , updateDoc);
+  res.send(updateDoc);
+})
 
     app.get('/service', async (req, res) => {
       const query = {};
@@ -183,7 +261,7 @@ async function run() {
 
     app.post('/booking', async (req, res) => {
       const booking = req.body;
-      console.log(booking);
+      //console.log(booking);
       const query = { treatment: booking.treatment, date: booking.date, patient: booking.patient }
       const exists = await bookingCollection.findOne(query);
       if (exists) {
@@ -191,12 +269,17 @@ async function run() {
       }
 
       const result = await bookingCollection.insertOne(booking);
-      console.log("sending email");
+     // console.log("sending email");
       sendAppointmentEmail(booking);
       return res.send({ success: true, result });
 
     })
  
+
+    
+
+
+
 
 
     // update user data 
@@ -282,6 +365,15 @@ app.delete('/doctor/:id',verifyJWT, verifyAdmin, async(req, res) => {
 
       const isAdmin = user.role == 'admin';
       res.send({admin: isAdmin})
+    })
+
+
+
+    app.get('/booking/:id', verifyJWT, async (req , res)=>{
+        const id = req.params.id;
+        const query = {_id : ObjectId(id)} 
+        const booking = await bookingCollection.findOne(query);
+        res.send(booking);
     })
 
     //end 
